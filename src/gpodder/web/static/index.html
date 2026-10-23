@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>gPodder Web</title>
+<style>
+  :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+  body { max-width: 1250px; padding: 0 1rem 7rem; margin: 1.5rem auto; }
+  header, form, .toolbar, .buttons { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  header { justify-content: space-between; }
+  button, input { font: inherit; padding: .6rem; }
+  button { cursor: pointer; }
+  input[type=url] { flex: 1; min-width: 180px; }
+  main { display: grid; grid-template-columns: 250px 1fr; gap: 1.5rem; margin-top: 1.5rem; }
+  nav { display: flex; flex-direction: column; gap: .5rem; }
+  nav button { text-align: left; overflow-wrap: anywhere; }
+  button[aria-pressed=true] { outline: 2px solid #5787ff; }
+  article { padding: 1rem 0; border-bottom: 1px solid #8885; }
+  h3 { display: inline; font-size: 1.1rem; }
+  small, .muted { opacity: .75; }
+  .description { white-space: pre-wrap; max-height: 12rem; overflow: auto; }
+  #message, .error { color: light-dark(#a31818, #ffaaaa); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #playback { position: fixed; bottom: 0; left: 0; right: 0; padding: .5rem 1rem; background: Canvas; border-top: 1px solid #8885; }
+  #playback audio { width: 100%; height: 35px; }
+  #playback p { margin: 0 0 .4rem; }
+  #feed-options { margin: 1rem 0; }
+  [hidden] { display: none !important; }
+  @media(max-width:700px) { main { grid-template-columns: 1fr; } }
+</style>
+<header><h1>gPodder Web</h1><span id="connection" role="status">Connecting...</span></header>
+<p class="muted">Pick episodes now. They download in the background and stay ready for later.</p>
+<form id="subscribe">
+  <label for="url">Feed URL</label><input id="url" type="url" required placeholder="https://example.com/podcast.xml">
+  <button>Add feed</button>
+</form>
+<p id="message" role="alert"></p>
+<main>
+  <aside>
+    <nav id="navigation" aria-label="Library">
+      <button id="library">All episodes</button>
+      <button id="up-next">Up next</button>
+    </nav>
+    <h2>Feeds</h2><nav id="feeds" aria-label="Feeds"></nav>
+  </aside>
+  <section>
+    <h2 id="heading">All episodes</h2>
+    <p id="feed-status" role="status"></p>
+    <div id="feed-options" hidden>
+      <div class="buttons"><button id="refresh">Check feed now</button><button id="cache-all">Download all available</button></div>
+      <p><label><input id="auto-download" type="checkbox"> Automatically download all new episodes from this feed</label></p>
+    </div>
+    <div class="toolbar">
+      <span id="selection">0 selected</span>
+      <button id="enqueue-selected" disabled>Add selected to Up next</button>
+      <button id="download-selected" disabled>Download selected</button>
+    </div>
+    <p id="queue-summary" class="muted"></p>
+    <div id="episodes"></div>
+    <div class="buttons"><button id="previous" hidden>Previous</button><button id="next" hidden>Next</button></div>
+  </section>
+</main>
+<div id="playback" hidden><p id="playing"></p><audio id="player" controls preload="none"></audio></div>
+<script>
+  const $ = id => document.getElementById(id);
+  let view = "library";
+  let feedId = null;
+  let offset = 0;
+  let requestId = 0;
+  let rendered = "";
+  let rows = [];
+  let queueRows = [];
+  const selected = new Set();
+  function error(problem) { $("message").textContent = problem.message; }
+  async function api(path, method = "GET", body) {
+    const response = await fetch(path, {
+      method, headers: body === undefined ? {} : {"Content-Type": "application/json"},
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => null);
+      throw new Error(result ? JSON.stringify(result.detail) : `HTTP ${response.status}`);
+    }
+    return response.status === 204 ? null : response.json();
+  }
+  function updateSelection() {
+    $("selection").textContent = `${selected.size} selected`;
+    $("enqueue-selected").disabled = $("download-selected").disabled = selected.size === 0;
+  }
+  function button(text, action, disabled = false) {
+    const element = document.createElement("button");
+    element.textContent = text;
+    element.disabled = disabled;
+    element.onclick = () => act(action);
+    return element;
+  }
+  async function act(action) {
+    $("message").textContent = "";
+    try { await action(); rendered = ""; await load(); }
+    catch (problem) { error(problem); }
+  }
+  function choose(nextView, id = null) {
+    view = nextView; feedId = id; offset = 0; rendered = "";
+    selected.clear(); updateSelection(); load().catch(error);
+  }
+  async function move(id, direction) {
+    const ids = queueRows.map(row => row.id);
+    const index = ids.indexOf(id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    await api("/api/queue", "PUT", {episode_ids: ids});
+  }
+  function render() {
+    $("episodes").replaceChildren();
+    if (!rows.length) {
+      const empty = document.createElement("p");
+      empty.textContent = view === "queue" ? "Nothing queued. Pick episodes from the library to prepare your next batch." : "No episodes yet. Add a feed, then wait for its first update.";
+      $("episodes").append(empty);
+    }
+    for (const row of rows) {
+      const article = document.createElement("article");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.has(row.id);
+      checkbox.setAttribute("aria-label", `Select ${row.title}`);
+      checkbox.onchange = () => {
+        if (checkbox.checked) selected.add(row.id); else selected.delete(row.id);
+        updateSelection();
+      };
+      const title = document.createElement("h3");
+      title.textContent = ` ${row.title}`;
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = `${row.feed_title} | ${row.published ? new Date(row.published * 1000).toLocaleDateString() : "Undated"} | ${row.played ? "Listened" : "Unlistened"} | ${row.download_state.replaceAll("_", " ")}${row.download_state === "downloading" ? ` ${Math.round(row.progress * 100)}%` : ""}${row.queue_position !== null ? " | Up next" : ""}`;
+      const actions = document.createElement("div");
+      actions.className = "buttons";
+      actions.append(
+        button("Add to Up next", () => api(`/api/queue/${row.id}`, "POST"), Boolean(row.played) || row.queue_position !== null),
+        button(row.download_state === "failed" ? "Retry download" : "Download", () => api(`/api/episodes/${row.id}/download`, "POST"), ["ready", "queued", "downloading"].includes(row.download_state)),
+        button(row.played ? "Mark unlistened" : "Mark listened", () => api(`/api/episodes/${row.id}`, "PATCH", {played: !row.played})),
+      );
+      if (row.download_state === "ready") {
+        actions.append(button("Play cached audio", async () => {
+          $("playing").textContent = row.title;
+          $("playback").hidden = false;
+          $("player").src = `/api/episodes/${row.id}/audio`;
+          await $("player").play();
+        }));
+      }
+      if (view === "queue") {
+        actions.append(
+          button("Move up", () => move(row.id, -1), row.id === rows[0].id),
+          button("Move down", () => move(row.id, 1), row.id === rows[rows.length - 1].id),
+          button("Remove from queue", () => api(`/api/queue/${row.id}`, "DELETE")),
+        );
+      }
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Description";
+      const description = document.createElement("p");
+      description.className = "description";
+      description.textContent = row.description || "No description supplied.";
+      details.append(summary, description);
+      article.append(checkbox, title, info, actions, details);
+      if (row.error || !row.available) {
+        const message = document.createElement("p");
+        message.className = "error";
+        message.textContent = row.error || "No longer listed by the publisher; only cached audio remains accessible.";
+        article.append(message);
+      }
+      $("episodes").append(article);
+    }
+    $("previous").hidden = view === "queue" || offset === 0;
+    $("next").hidden = view === "queue" || rows.length < 100;
+  }
+  async function load() {
+    const current = ++requestId;
+    const path = view === "queue" ? "/api/queue" : `/api/episodes?offset=${offset}${feedId === null ? "" : `&feed_id=${feedId}`}`;
+    const [feeds, episodes, queue] = await Promise.all([api("/api/feeds"), api(path), api("/api/queue")]);
+    if (current !== requestId) return;
+    queueRows = queue;
+    $("connection").textContent = "Connected - background caching active";
+    $("up-next").textContent = `Up next (${queue.length})`;
+    $("up-next").setAttribute("aria-pressed", String(view === "queue"));
+    $("library").setAttribute("aria-pressed", String(view === "library" && feedId === null));
+    $("feeds").replaceChildren();
+    for (const feed of feeds) {
+      const item = button(`${feed.title} (${feed.episodes})${feed.error ? " - error" : ""}`, async () => choose("library", feed.id));
+      item.setAttribute("aria-pressed", String(view === "library" && feed.id === feedId));
+      $("feeds").append(item);
+    }
+    const feed = feeds.find(item => item.id === feedId);
+    $("heading").textContent = view === "queue" ? "Up next" : (feed ? feed.title : "All episodes");
+    $("feed-options").hidden = view === "queue" || !feed;
+    $("feed-status").className = feed && feed.error ? "error" : "muted";
+    $("feed-status").textContent = feed ? (feed.error || (feed.checked_at ? `Last checked: ${new Date(feed.checked_at * 1000).toLocaleString()}` : "Fetching feed...")) : "";
+    if (feed) $("auto-download").checked = Boolean(feed.auto_download);
+    const ready = queue.filter(item => item.download_state === "ready").length;
+    $("queue-summary").textContent = view === "queue" ? `${ready} ready, ${queue.length - ready} waiting or failed. USB transfer will be added later; nothing is copied or deleted from a device.` : "";
+    rows = episodes;
+    const fingerprint = JSON.stringify([view, feedId, offset, rows]);
+    if (fingerprint !== rendered) { rendered = fingerprint; render(); }
+  }
+  $("subscribe").onsubmit = event => {
+    event.preventDefault();
+    const url = $("url").value;
+    act(async () => {
+      const feed = await api("/api/feeds", "POST", {url});
+      $("url").value = "";
+      view = "library"; feedId = feed.id; offset = 0;
+    });
+  };
+  $("library").onclick = () => choose("library");
+  $("up-next").onclick = () => choose("queue");
+  $("previous").onclick = () => { offset = Math.max(0, offset - 100); load().catch(error); };
+  $("next").onclick = () => { offset += 100; load().catch(error); };
+  $("refresh").onclick = () => act(() => api(`/api/feeds/${feedId}/refresh`, "POST"));
+  $("cache-all").onclick = () => {
+    if (confirm("Download every available episode from this feed? This may use substantial disk space.")) {
+      act(() => api(`/api/feeds/${feedId}/download`, "POST"));
+    }
+  };
+  $("auto-download").onchange = () => {
+    const enabled = $("auto-download").checked;
+    if (enabled && !confirm("Download all currently available episodes and automatically cache future ones?")) {
+      $("auto-download").checked = false; return;
+    }
+    act(() => api(`/api/feeds/${feedId}`, "PATCH", {auto_download: enabled}));
+  };
+  $("enqueue-selected").onclick = () => act(async () => {
+    for (const id of selected) await api(`/api/queue/${id}`, "POST");
+    selected.clear(); updateSelection();
+  });
+  $("download-selected").onclick = () => act(async () => {
+    for (const id of selected) await api(`/api/episodes/${id}/download`, "POST");
+    selected.clear(); updateSelection();
+  });
+  load().catch(error);
+  setInterval(() => load().catch(problem => {
+    $("connection").textContent = "Disconnected - retrying...";
+    error(problem);
+  }), 3000);
+</script>
+</html>

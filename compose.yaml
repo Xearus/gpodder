@@ -1,0 +1,22 @@
+services:
+  gpodder:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/gpodder-web:latest
+    ports:
+      - "${GPODDER_BIND:-127.0.0.1}:${GPODDER_PORT:-8090}:8080"
+    environment:
+      GPODDER_HOME: /data
+      GPODDER_WEB_POLL_SECONDS: "${GPODDER_WEB_POLL_SECONDS:-300}"
+    volumes:
+      - gpodder-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "gpodder.web.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  gpodder-data:

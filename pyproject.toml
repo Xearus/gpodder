@@ -17,16 +17,16 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    "dbus-python;platform_system=='Linux'",
     "mygpoclient==1.10",
     "podcastparser==0.6.11",
-    "PyGObject",
     "requests[socks]>=2.32.3",
     "urllib3>=2.2.2",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
+desktop = ["dbus-python;platform_system=='Linux'", "PyGObject"]
+web = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
 eyed3 = ["eyed3"]
 html5lib = ["html5lib==1.1"]
 # extensions
@@ -40,6 +40,9 @@ tagging = ["mutagen==1.47.0", "pillow"]
 video_converter = ["ffmpeg"]
 youtube_dl = ["yt-dlp", "ffmpeg"]
 
+[project.scripts]
+gpodder-web = "gpodder.web.app:main"
+
 [project.urls]
 Homepage = "http://gpodder.org"
 Documentation = "https://gpodder.github.io/docs/"
@@ -50,3 +53,6 @@ Issues = "https://github.com/gpodder/gpodder/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "gpodder.__version__"}
+
+[tool.setuptools.package-data]
+"gpodder.web" = ["static/*.html"]

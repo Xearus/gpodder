@@ -178,6 +178,14 @@ def make_directory(path):
     Returns True if the directory exists after the function
     call, False otherwise.
     """
+    if isinstance(path, (str, os.PathLike)) and not is_absolute_url(os.fspath(path)):
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as err:
+            logger.warning('Could not create directory %s: %s', path, err)
+            return False
+        return True
+
     from gi.repository import Gio, GLib
 
     if not isinstance(path, Gio.File):

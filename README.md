@@ -8,6 +8,16 @@ ___
 
 Copyright  2005-2022 The gPodder Team
 
+## Web edition in this fork
+
+This fork adds a native HTTP server and browser interface using gPodder's
+headless feed, library, and download engine. No GTK, virtual desktop, or VNC is
+used. See [Podman/Docker deployment](container/README.md).
+
+For a Python installation of the original desktop interface, install
+`.[desktop]`. The `.[web]` extra installs the web server without desktop
+dependencies. Existing source and distribution-package desktop usage is unchanged.
+
 
 ## License
 

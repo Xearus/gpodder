@@ -1,0 +1,28 @@
+name: Native web container
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and exercise the headless engine
+        run: |
+          docker build --target webtest -f Containerfile -t gpodder-web:test .
+          docker run --rm gpodder-web:test
+      - name: Build the production image
+        run: docker build -f Containerfile -t gpodder-web:ci .
+      - name: Check the native HTTP server
+        run: |
+          docker run -d --name gpodder-web -p 127.0.0.1:8090:8080 gpodder-web:ci
+          curl --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 -fsS http://127.0.0.1:8090/health
+          docker exec gpodder-web python -m gpodder.web.healthcheck
+      - name: Container logs
+        if: always()
+        run: docker logs gpodder-web || true
