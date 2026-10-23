@@ -176,7 +176,7 @@
   async function load() {
     const current = ++requestId;
     const path = view === "queue" ? "/api/queue" : `/api/episodes?offset=${offset}${feedId === null ? "" : `&feed_id=${feedId}`}`;
-    const [feeds, episodes, queue] = await Promise.all([api("/api/feeds"), api(path), api("/api/queue")]);
+    const [feeds, episodes, queue] = await Promise.all([api("/api/feeds"), api(path), api("/api/queue"), api("/health")]);
     if (current !== requestId) return;
     queueRows = queue;
     $("connection").textContent = "Connected - background caching active";

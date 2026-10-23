@@ -84,6 +84,7 @@ def test_native_headless_engine_and_feed(web, httpserver):
     client, app = web
     assert client.get("/health").json() == {"status": "ok", "engine": "gpodder", "desktop": False}
     assert client.get("/").status_code == 200
+    assert (app.state.engine.home / "Database").is_file()
     assert app.state.engine.core.__class__.__module__ == "gpodder.core"
     assert importlib.util.find_spec("gi") is None
     assert importlib.util.find_spec("dbus") is None

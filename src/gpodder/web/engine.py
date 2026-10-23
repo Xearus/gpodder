@@ -56,6 +56,7 @@ class Engine(threading.Thread):
             gpodder.prefix = sys.prefix
             gpodder.ui.cli = True
             self.core = core.Core()
+            self.core.model.get_podcasts()
             self.store.execute(
                 "UPDATE episodes SET download_state='queued' WHERE download_state='downloading'"
             )
